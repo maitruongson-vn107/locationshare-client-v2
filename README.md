@@ -1,0 +1,1 @@
+# locationshare-client-v2
