@@ -8,8 +8,8 @@
     - Giao diện hiển thị ra danh sách người dùng ở gần
     
 * Ngôn ngữ và công nghệ sử dụng:
-  python v3.x
-  Flask (flask-restful, flask)
-  PyQt5 (pyqt5, pyqt5-tools)
-  pycryptodome
+  - python v3.x
+  - Flask (flask-restful, flask)
+  - PyQt5 (pyqt5, pyqt5-tools)
+  - pycryptodome
   
