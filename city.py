@@ -1,4 +1,4 @@
-a = [
+city_dict = [
     {
         "city": "Cần Thơ",
         "province": "Cần Thơ",

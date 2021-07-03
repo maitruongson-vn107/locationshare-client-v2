@@ -20,10 +20,15 @@ import re
 import json
 from urllib.request import urlopen
 import requests
-
+from flask import Flask
 import threading
 import json
+from threading import Thread
 from Crypto.Hash import SHA256
+from Crypto.Cipher import DES3
+from flask import Flask, jsonify, request
+import json, os, signal
+import random
 base = "http://127.0.0.1:5000/"
 
 # def locate_me():
@@ -31,10 +36,10 @@ base = "http://127.0.0.1:5000/"
 #     country = gps_data['country']
 #     region = gps_data['region']
 #     print('Ip: {0}, org: {1}, city: {2}, country: {3}, region: {4}'.format(ip,org,city,country,region))
-from city import a
+from city import city_dict
 i = 0
 
-for d in a:
+for d in city_dict:
     d['province_code'] = i
     i += 1
 
@@ -42,13 +47,13 @@ timer = None
 list = []
 def city_to_code(province:str):
     province_code = '3' #Hà Nội - mặc định
-    for x in a:
+    for x in city_dict:
         if (x['province'] == province):
             province_code = x['province_code']
     return str(province_code)
 def code_to_city(code:str):
     province = "Hà Nội" #mặc định
-    for x in a:
+    for x in city_dict:
         if (x['province_code'] == int(code)):
             province = x['province']
     return province
@@ -57,8 +62,7 @@ def map_city_vnese(input_str):
     s1 = u'ÀÁÂÃÈÉÊÌÍÒÓÔÕÙÚÝàáâãèéêìíòóôõùúýĂăĐđĨĩŨũƠơƯưẠạẢảẤấẦầẨẩẪẫẬậẮắẰằẲẳẴẵẶặẸẹẺẻẼẽẾếỀềỂểỄễỆệỈỉỊịỌọỎỏỐốỒồỔổỖỗỘộỚớỜờỞởỠỡỢợỤụỦủỨứỪừỬửỮữỰựỲỳỴỵỶỷỸỹ'
     s0 = u'AAAAEEEIIOOOOUUYaaaaeeeiioooouuyAaDdIiUuOoUuAaAaAaAaAaAaAaAaAaAaAaAaEeEeEeEeEeEeEeEeIiIiOoOoOoOoOoOoOoOoOoOoOoOoUuUuUuUuUuUuUuYyYyYyYy'
     s = ''
-	
-    print(input_str.encode('utf-8'))
+    
     for c in input_str:
         if c in s1:
             s += s0[s1.index(c)]
@@ -90,11 +94,20 @@ class App(QStackedWidget):
         self.addWidget(self.main_window)
         self.signup = SignUpForm(self)
         self.addWidget(self.signup)
-        self.user  = {"userId":None}
+        self.user  = None
         self.resize("login_size")
-        #self.set_interval(self.update_locate_periodicly, 15)
+        self.myurl = None
+        self.current_k1 = None
+        quit = QAction("Quit", self)
+        quit.triggered.connect(self.close)
 
-
+    def closeEvent(self, a0: QtGui.QCloseEvent) -> None:
+        if (self.user != None and self.user['userId'] != None):
+            data = {"userId":self.user['userId']}
+            requests.post(base+'logout', json=data).json()
+        if (self.myurl != None):
+            requests.get(self.myurl+'stopUserServer')
+        return super().closeEvent(a0)
     def resize(self,scene = "login_size"):
         if (scene == "login_size"):
             self.setFixedWidth(App.login_size["width"])
@@ -123,7 +136,7 @@ class SignUpForm(QWidget):
         sha = SHA256.new(bytes(self.lineEdit_2.text(),'utf-8'))
         hashed_pass = str(sha.hexdigest())
         data = {"username":self.lineEdit.text(),"fullName":self.lineEdit_3.text(), "birthYear":int(self.lineEdit_5.text()),"gender": gender,"password":hashed_pass,
-                      "avatarUrl":"ava.png","currentCity":"3"}
+                      "avatarUrl":"ava.png"}
         res = requests.post(base+'signUp', json=data).json()
         if (res['msg'] == "success"):
             msg = QMessageBox()
@@ -158,20 +171,77 @@ class LoginForm(QWidget):
         self.manager.setCurrentIndex(self.manager.currentIndex() + 1)
         self.manager.main_window.gen_personal_data(user)
         self.manager.resize("main_size")
-        #auto update per 20s   
-        # global timer 
-        # timer = self.manager.main_window.set_interval(self.manager.main_window.locate_me,5)
+        
     def login(self):
         #call login api
         sha = SHA256.new(bytes(self.lineEdit_2.text(),'utf-8'))
         hashed_pass = str(sha.hexdigest())
-        print(hashed_pass)
+        
         data = {'username': self.lineEdit.text(), 'password': hashed_pass}
         res = requests.post(base+'login', json=data).json()
-        print(res)
+        
         if (res['msg'] == "success"):
             self.manager.user = res['data']
             self.toMain(self.manager.user)
+        
+            local_serr = Flask(__name__)
+            @local_serr.route('/stopUserServer', methods=['GET'])
+            def stopUserServer():
+                func = request.environ.get('werkzeug.server.shutdown')
+                if func is None:
+                    raise RuntimeError('Not running with the Werkzeug Server')
+                func()
+                return {"msg":"Success"}
+            def generate_session_key(common_key: int, counter: int):
+                des3_1 = b'12345678'
+                des3_2 = b'abcdefgh'
+                common_key = common_key.to_bytes(8, 'big')
+                key = bytearray()
+                key.extend(des3_1)
+                key.extend(des3_2)
+                key.extend(common_key)
+
+                counter = counter.to_bytes(8, 'big')
+                des3 = DES3.new(key, DES3.MODE_ECB)
+                des3_out = des3.encrypt(counter)
+                return int.from_bytes(des3_out[0:4], 'big'), int.from_bytes(des3_out[4:8], 'big')
+            
+            @local_serr.route('/encrypt_pos', methods=['POST'])
+            def encrypt():
+                
+                j = request.get_json(force=True)
+                common_key = j['common_key']
+                counter = j['counter']
+                role = j['role']
+                k_0, k_1 = generate_session_key(counter, common_key)
+                if(role == 'bob'):
+                    r = random.randint(10000, 4000000000)
+                    b_current_city = int(city_to_code(self.manager.main_window.comboBox.currentText()))
+                    x_b = r * (b_current_city + k_0) + k_1
+                    return {'r':r,'x_b':x_b}
+                else:
+                    a_current_city = int(city_to_code(self.manager.main_window.comboBox.currentText()))
+                    self.manager.current_k1 = k_1
+                    return {'x_a':a_current_city + k_0}
+            @local_serr.route('/check', methods=['POST'])
+            def check():
+                j = request.get_json(force=True)
+                x = j['x']
+                k_1 = self.manager.current_k1
+                if(x + k_1 == 0):
+                    return {'check':True}
+                else:
+                    return {'check':False}
+            port = int(5000 + res['data']['userId'])
+            
+            self.manager.myurl = 'http://127.0.0.1:'+ str(port)+'/'
+           
+            kwargs = {'host': '127.0.0.1', 'port': port,'threaded': True, 'use_reloader': False, 'debug': True}
+
+            flaskThread = Thread(target=local_serr.run, daemon=True, kwargs=kwargs)
+            flaskThread.start()
+
+            
         else:
             msg = QMessageBox()
             msg.setWindowTitle("Login Fail")
@@ -197,32 +267,23 @@ class MainWindow(QWidget):
         self.pushButton.clicked.connect(self.search)
         self.pushButton_3.clicked.connect(self.locate_me)
         self.pushButton_4.clicked.connect(self.upload_file)
-        self.comboBox.view().pressed.connect(self.on_choose)
-        #province select dropdown
+
         for i in range(64):
             self.comboBox.addItem("")
         _translate = QtCore.QCoreApplication.translate
         for i in range(64):
-            self.comboBox.setItemText(i, _translate("Form", a[i]["province"]))
-            map_low_up[a[i]["province"]] =  map_city_vnese(a[i]["province"])
+            self.comboBox.setItemText(i, _translate("Form", city_dict[i]["province"]))
+            map_low_up[city_dict[i]["province"]] =  map_city_vnese(city_dict[i]["province"])
         self.lay = QVBoxLayout()
         self.scrollAreaWidgetContents.setLayout(self.lay)
         self.lay.setSpacing(10)
         
-    
-    # def set_interval(self,func, sec):
-    #     def func_wrapper():
-    #         self.set_interval(func, sec)
-    #         func()
-    
-    #     t = threading.Timer(sec, func_wrapper)
-    #     t.start()
-    #     return t
+
     def upload_file(self):
         fname = QFileDialog.getOpenFileName(self, 'Open file', 'c:\\', "Image files (*.jpg *.gif *.png)")
         imagePath = fname[0]
         if (imagePath != "" and imagePath != None):
-            print(self.manager.user['userId'])
+           
             files = {'file': open(imagePath,'rb')}
             userid = self.manager.user['userId']
             values = {'userId':userid}
@@ -234,7 +295,7 @@ class MainWindow(QWidget):
                 msg.setText("Server error. Can't change avatar")
                 msg.exec_()
             else:
-                print(res['data'])
+                
                 self.manager.user['avatarUrl'] = res['data']
                 self.gen_personal_data(self.manager.user)
         
@@ -248,39 +309,26 @@ class MainWindow(QWidget):
         # org = gps_data['org']
         province = gps_data['region']
         print(province)
-        province = province.lower().replace(' ','')
+        
         for i in range(64):
-            print('so sanh')
-            print(map_low_up[self.comboBox.itemText(i)])
-            if (province == map_low_up[self.comboBox.itemText(i)]):
-                print('find')
-                print(i)
+            
+            
+            if (map_low_up[province] == map_low_up[self.comboBox.itemText(i)]):    
                 self.comboBox.setCurrentIndex(i)
         # index = self.comboBox.findText(province, QtCore.Qt.MatchFixedString)
         # if index >= 0:
         #     self.comboBox.setCurrentIndex(index)
-        location = self.comboBox.currentText()
-        print(location)
-        city_code = city_to_code(location)
-        city_hashed_code = hash_city(city_code)
-        data = {'userId': self.manager.user['userId'], 'currentCity': city_hashed_code}
-        print('update locate when login')
-        print(data)
-        res = requests.post(base+'update_locate', json=data).json()
-    def on_choose(self,index):
-        location = self.comboBox.model().itemFromIndex(index).text()
+        # location = self.comboBox.currentText()
+        # print(location)
+        # city_code = city_to_code(location)
+        # city_hashed_code = hash_city(city_code)
+        # data = {'userId': self.manager.user['userId']}
+        
+        # res = requests.post(base+'update_locate', json=data).json()
+    # def on_choose(self,index):
+    #     location = self.comboBox.model().itemFromIndex(index).text()
 
-        city_code = city_to_code(location)
-        city_hashed_code = hash_city(city_code)
-        data = {'userId': self.manager.user['userId'], 'currentCity': city_hashed_code}
-        res = requests.post(base+'update_locate', json=data).json()
-        if (res['msg'] != "success"):
-            msg = QMessageBox()
-            msg.setWindowTitle("Update Fail")
-            msg.setText("Server error. Can't change location")
-            msg.exec_()
-
-        #call api with location
+    #     #call api with location
 
     def gen_personal_data(self,user):
         #calculate age from date of birth
@@ -307,24 +355,27 @@ class MainWindow(QWidget):
         if (self.manager.user['userId'] != None):
             data = {'userId':self.manager.user['userId']}
             requests.post(base+'logout', json=data).json()
+
+            try:
+                requests.get(self.manager.myurl+'stopUserServer')
+            except Exception:
+                print('shut down server fail')
+            self.manager.myurl = None
         self.manager.setCurrentIndex(self.manager.currentIndex() - 1)
         self.manager.resize("login_size")
         self.manager.clear_data()
         # timer.cancel()
     def search(self):
+        
         self.clear_data()
-        location = self.comboBox.currentText()
-        city_code = city_to_code(location)
-        city_hashed_code = hash_city(city_code)
-        data = {'userId': int(self.manager.user['userId']), 'currentCity': city_hashed_code}
+        data = {'userId': int(self.manager.user['userId'])}
         res = requests.get(base+'search', json=data).json()
-        print('Search_result:')
-        print(res)
+        
         # users = res
         # users = [{"fullName": "Huy Dang", "age": "21", "gender": "Male"},
         #          {"fullName": "Son Mai", "age": "21", "gender": "Male"}
         #          ]
-        # create a user box
+        # create an user box
         if (False):
             return
         else:
@@ -369,26 +420,27 @@ class MainWindow(QWidget):
                 label_3.setText(gender + str(u["age"]))
                 verticalLayout.addWidget(label_3)
 
+# def hash_city(code:str):
+   
+    
+#     sha = SHA256.new(bytes(code,'utf-8'))
+#     hashed_ = int.from_bytes(sha.digest(),'big')
+    
+#     return str(hashed_)
 app = QApplication(sys.argv)
 widgets = App()
 list.append(widgets)
 widgets.show()
 
 
-    
-def hash_city(code:str):
-    print('hash_code city')
-    print(code)
-    sha = SHA256.new(bytes(code,'utf-8'))
-    hashed_ = int.from_bytes(sha.digest(),'big')
-    print('result')
-    print(hashed_)
-    return str(hashed_)
 
+    
+    
 try:
     sys.exit(app.exec_())
 except:
-    if (widgets.user['userId'] != None):
-        data = {"userId":widgets.user['userId']}
-        requests.post(base+'logout', json=data).json()
+    
+        # requests.post(base+'logout', json=data).json()
     print('Closing')
+# if __name__ == "__main__":
+    
