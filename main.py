@@ -313,7 +313,7 @@ class MainWindow(QWidget):
         for i in range(64):
             
             
-            if (map_low_up[province] == map_low_up[self.comboBox.itemText(i)]):    
+            if (map_city_vnese(province) == map_low_up[self.comboBox.itemText(i)]):    
                 self.comboBox.setCurrentIndex(i)
         # index = self.comboBox.findText(province, QtCore.Qt.MatchFixedString)
         # if index >= 0:
